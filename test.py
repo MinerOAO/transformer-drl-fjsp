@@ -4,7 +4,7 @@ import os
 import random
 import time as time
 
-import gym
+import gymnasium
 import pandas as pd
 import torch
 import numpy as np
@@ -12,6 +12,7 @@ import numpy as np
 import pynvml
 import PPO_model
 from env.load_data import nums_detec
+from utils.gantt_chart import gantt_chart_plt
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -44,19 +45,30 @@ def main():
     env_paras["device"] = device
     model_paras["device"] = device
     env_test_paras = copy.deepcopy(env_paras)
-    num_ins = test_paras["num_ins"]
     if test_paras["sample"]:
         env_test_paras["batch_size"] = test_paras["num_sample"]
     else:
         env_test_paras["batch_size"] = 1
-    model_paras["actor_in_dim"] = model_paras["out_size_ma"] * 2 + model_paras["out_size_ope"] * 2
-    model_paras["critic_in_dim"] = model_paras["out_size_ma"] + model_paras["out_size_ope"]
+    model_paras["actor_in_dim"] = model_paras["out_size_ma"] + model_paras["out_size_ope"] + 1 
+    model_paras["critic_in_dim"] = model_paras["out_size_ma"] + model_paras["out_size_ope"] + 1 
+
+    # model_paras["actor_in_dim"] = model_paras["out_size_ma"] * 2 + model_paras["out_size_ope"] * 2
+    # model_paras["critic_in_dim"] = model_paras["out_size_ma"] + model_paras["out_size_ope"]
 
     data_path = "./data_test/{0}/".format(test_paras["data_path"])
-    test_files = os.listdir(data_path)
+    test_files = []
+    if test_paras["data_prefix"] == "":
+        test_files = os.listdir(data_path)
+    else:
+        for root, ds, fs in os.walk(data_path):
+            for f in fs:
+                if f.startswith(test_paras["data_prefix"]):
+                    test_files.append(f)
     test_files.sort(key=lambda x: x[:-4])
-    test_files = test_files[:num_ins]
+    num_ins = len(test_files)
     mod_files = os.listdir('./model/')[:]
+
+    gantt = False
 
     memories = PPO_model.Memory()
     model = PPO_model.PPO(model_paras, train_paras)
@@ -64,18 +76,14 @@ def main():
     envs = []  # Store multiple environments
 
     # Detect and add models to "rules"
-    if "DRL" in rules:
-        for root, ds, fs in os.walk('./model/'):
-            for f in fs:
-                if f.endswith('.pt'):
-                    rules.append(f)
-    if len(rules) != 1:
-        if "DRL" in rules:
-            rules.remove("DRL")
+    for root, ds, fs in os.walk('./model/'):
+        for f in fs:
+            if f.endswith('.pt'):
+                rules.append(f)
 
     # Generate data files and fill in the header
     str_time = time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))
-    save_path = './save/test_{0}'.format(str_time)
+    save_path = f'./save/test_{str_time}_{test_paras["data_path"]}'
     os.makedirs(save_path)
     writer = pd.ExcelWriter(
         '{0}/makespan_{1}.xlsx'.format(save_path, str_time))  # Makespan data storage path
@@ -83,22 +91,22 @@ def main():
     file_name = [test_files[i] for i in range(num_ins)]
     data_file = pd.DataFrame(file_name, columns=["file_name"])
     data_file.to_excel(writer, sheet_name='Sheet1', index=False)
-    writer.save()
-    writer.close()
+    writer._save()
+    # writer.close()
     data_file.to_excel(writer_time, sheet_name='Sheet1', index=False)
-    writer_time.save()
-    writer_time.close()
+    writer_time._save()
+    # writer_time.close()
 
     # Rule-by-rule (model-by-model) testing
     start = time.time()
-    for i_rules in range(len(rules)):
+    for i_rules in range(len(rules)): # replace with ?enumerate
         rule = rules[i_rules]
         # Load trained model
         if rule.endswith('.pt'):
             if device.type == 'cuda':
-                model_CKPT = torch.load('./model/' + mod_files[i_rules])
+                model_CKPT = torch.load('./model/' + mod_files[i_rules], weights_only=True)
             else:
-                model_CKPT = torch.load('./model/' + mod_files[i_rules], map_location='cpu')
+                model_CKPT = torch.load('./model/' + mod_files[i_rules], map_location='cpu', weights_only=True)
             print('\nloading checkpoint:', mod_files[i_rules])
             model.policy.load_state_dict(model_CKPT)
             model.policy_old.load_state_dict(model_CKPT)
@@ -116,6 +124,7 @@ def main():
             env_test_paras["num_jobs"] = ins_num_jobs
             env_test_paras["num_mas"] = ins_num_mas
 
+            env_creation_time = time.time()
             # Environment object already exists
             if len(envs) == num_ins:
                 env = envs[i_ins]
@@ -127,13 +136,15 @@ def main():
                     envs.clear()
                 # DRL-S, each env contains multiple (=num_sample) copies of one instance
                 if test_paras["sample"]:
-                    env = gym.make('fjsp-v0', case=[test_file] * test_paras["num_sample"],
+                    env = gymnasium.make('fjsp-v0', case=[test_file] * test_paras["num_sample"],
                                    env_paras=env_test_paras, data_source='file')
                 # DRL-G, each env contains one instance
                 else:
-                    env = gym.make('fjsp-v0', case=[test_file], env_paras=env_test_paras, data_source='file')
+                    env = gymnasium.make('fjsp-v0', case=[test_file], env_paras=env_test_paras, data_source='file')
+                env.reset()
                 envs.append(copy.deepcopy(env))
-                print("Create env[{0}]".format(i_ins))
+                # print("Create env[{0}]".format(i_ins))
+            # print(f"Env creation time:{time.time() - env_creation_time}")
 
             # Schedule an instance/environment
             # DRL-S
@@ -145,30 +156,45 @@ def main():
             else:
                 time_s = []
                 makespan_s = []  # In fact, the results obtained by DRL-G do not change
-                for j in range(test_paras["num_average"]):
+                for j in range(test_paras["num_average"]): # num_average times
                     makespan, time_re = schedule(env, model, memories)
                     makespan_s.append(makespan)
                     time_s.append(time_re)
+                    if gantt:
+                        gantt_chart_plt(env.schedules_batch[0], env.nums_ope_batch[0], env.num_ope_biases_batch[0], env.num_jobs, int(makespan.item()), ins_name=test_files[i_ins])
                     env.reset()
                 makespans.append(torch.mean(torch.tensor(makespan_s)))
                 times.append(torch.mean(torch.tensor(time_s)))
-            print("finish env {0}".format(i_ins))
+            print(f"finish env {i_ins}")
         print("rule_spend_time: ", time.time() - step_time_last)
 
         # Save makespan and time data to files
-        data = pd.DataFrame(torch.tensor(makespans).t().tolist(), columns=[rule])
+        baseline = pd.read_excel("./history_save/benchmark baseline.xlsx")
+        baseline_dict = dict(zip(baseline['Name'], baseline['Value']))
+        baseline_value = {k: baseline_dict.get(k) for k in file_name}
+        baseline_value = baseline_value.values()
+
+        makespan_list = torch.tensor(makespans).t().tolist()
+        data = pd.DataFrame(makespan_list, columns=[rule])
         data.to_excel(writer, sheet_name='Sheet1', index=False, startcol=i_rules + 1)
-        writer.save()
-        writer.close()
+        writer._save()
+
+        gap_data = [(y - float(x))/float(x) for x, y in zip(baseline_value, makespan_list)]
+        data = pd.DataFrame(gap_data, columns=["Gap"])
+        data.to_excel(writer, sheet_name='Sheet1', index=False, startcol=i_rules + 2)
+        writer._save()
+        # writer.close()
         data = pd.DataFrame(torch.tensor(times).t().tolist(), columns=[rule])
         data.to_excel(writer_time, sheet_name='Sheet1', index=False, startcol=i_rules + 1)
-        writer_time.save()
-        writer_time.close()
+        writer_time._save()
+        # writer_time.close()
 
         for env in envs:
             env.reset()
-
-    print("total_spend_time: ", time.time() - start)
+        
+    writer.close()
+    writer_time.close()
+    print("total_spend_time: ", time.time() - start) # Collect total time among all instances Need improved TODO
 
 def schedule(env, model, memories, flag_sample=False):
     # Get state and completion signal
@@ -184,12 +210,11 @@ def schedule(env, model, memories, flag_sample=False):
         state, rewards, dones = env.step(actions)  # environment transit
         done = dones.all()
     spend_time = time.time() - last_time  # The time taken to solve this environment (instance)
-    # print("spend_time: ", spend_time)
 
     # Verify the solution
-    gantt_result = env.validate_gantt()[0]
-    if not gantt_result:
-        print("Scheduling Error！！！！！！")
+    # gantt_result = env.validate_gantt()[0]
+    # if not gantt_result:
+    #     print("Scheduling Error！！！！！！")
     return copy.deepcopy(env.makespan_batch), spend_time
 
 

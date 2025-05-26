@@ -5,7 +5,7 @@ import random
 import time
 from collections import deque
 
-import gym
+import gymnasium
 import pandas as pd
 import torch
 import numpy as np
@@ -13,8 +13,9 @@ from visdom import Visdom
 
 import PPO_model
 from env.case_generator import CaseGenerator
-from validate import validate, get_validate_env
+from validate import validate
 
+from datetime import datetime
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -26,6 +27,9 @@ def setup_seed(seed):
 def main():
     # PyTorch initialization
     # gpu_tracker = MemTracker()  # Used to monitor memory (of gpu)
+    # setup_seed(20010119)
+    seed = torch.seed()
+    #seed = 32866273872500 , 21606217664800
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     if device.type == 'cuda':
         torch.cuda.set_device(device)
@@ -44,9 +48,8 @@ def main():
     env_paras["device"] = device
     model_paras["device"] = device
     env_valid_paras = copy.deepcopy(env_paras)
-    env_valid_paras["batch_size"] = env_paras["valid_batch_size"]
-    model_paras["actor_in_dim"] = model_paras["out_size_ma"] * 2 + model_paras["out_size_ope"] * 2
-    model_paras["critic_in_dim"] = model_paras["out_size_ma"] + model_paras["out_size_ope"]
+    model_paras["actor_in_dim"] = model_paras["out_size_ma"] + model_paras["out_size_ope"] + 1 
+    model_paras["critic_in_dim"] = model_paras["out_size_ma"] + model_paras["out_size_ope"] + 1 
 
     num_jobs = env_paras["num_jobs"]
     num_mas = env_paras["num_mas"]
@@ -55,15 +58,16 @@ def main():
 
     memories = PPO_model.Memory()
     model = PPO_model.PPO(model_paras, train_paras, num_envs=env_paras["batch_size"])
-    env_valid = get_validate_env(env_valid_paras)  # Create an environment for validation
     maxlen = 1  # Save the best model
     best_models = deque()
     makespan_best = float('inf')
+    check_point = train_paras["check_point"]
 
     # Use visdom to visualize the training process
     is_viz = train_paras["viz"]
     if is_viz:
-        viz = Visdom(env=train_paras["viz_name"])
+        viz_name = '{0}_{1}'.format(train_paras["viz_name"], datetime.now().strftime("%Y/%m/%d, %H:%M:%S"))
+        viz = Visdom(env=(viz_name))
 
     # Generate data files and fill in the header
     str_time = time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))
@@ -77,23 +81,35 @@ def main():
     valid_results_100 = []
     data_file = pd.DataFrame(np.arange(10, 1010, 10), columns=["iterations"])
     data_file.to_excel(writer_ave, sheet_name='Sheet1', index=False)
-    writer_ave.save()
-    writer_ave.close()
+    writer_ave._save()
+    # writer_ave.close()
     data_file = pd.DataFrame(np.arange(10, 1010, 10), columns=["iterations"])
     data_file.to_excel(writer_100, sheet_name='Sheet1', index=False)
-    writer_100.save()
-    writer_100.close()
+    writer_100._save()
+    # writer_100.close()
 
     # Start training iteration
     start_time = time.time()
     env = None
+
+    if check_point != '' :
+        if device.type == 'cuda':
+            model_CKPT = torch.load(check_point, weights_only=False)
+        else:
+            model_CKPT = torch.load(check_point, map_location='cpu', weights_only=False)
+        print('\nloading checkpoint:', check_point)
+        model.policy.load_state_dict(model_CKPT)
+        model.policy_old.load_state_dict(model_CKPT)
+
     for i in range(1, train_paras["max_iterations"]+1):
         # Replace training instances every x iteration (x = 20 in paper)
         if (i - 1) % train_paras["parallel_iter"] == 0:
             # \mathcal{B} instances use consistent operations to speed up training
             nums_ope = [random.randint(opes_per_job_min, opes_per_job_max) for _ in range(num_jobs)]
+            # maybe disable flag_same_ope?
             case = CaseGenerator(num_jobs, num_mas, opes_per_job_min, opes_per_job_max, nums_ope=nums_ope)
-            env = gym.make('fjsp-v0', case=case, env_paras=env_paras)
+            env = gymnasium.make('fjsp-v0', case=case, env_paras=env_paras)
+            env.reset()
             print('num_job: ', num_jobs, '\tnum_mas: ', num_mas, '\tnum_opes: ', sum(nums_ope))
 
         # Get state and completion signal
@@ -103,9 +119,9 @@ def main():
         last_time = time.time()
 
         # Schedule in parallel
-        while ~done:
+        while not done:
             with torch.no_grad():
-                actions = model.policy_old.act(state, memories, dones)
+                actions = model.policy_old.act(state, memories, dones, flag_sample=True)
             state, rewards, dones = env.step(actions)
             done = dones.all()
             memories.rewards.append(rewards)
@@ -135,7 +151,7 @@ def main():
         if i % train_paras["save_timestep"] == 0:
             print('\nStart validating')
             # Record the average results and the results on each instance
-            vali_result, vali_result_100 = validate(env_valid_paras, env_valid, model.policy_old)
+            vali_result, vali_result_100 = validate(env_valid_paras, model.policy_old)
             valid_results.append(vali_result.item())
             valid_results_100.append(vali_result_100)
 
@@ -145,7 +161,7 @@ def main():
                 if len(best_models) == maxlen:
                     delete_file = best_models.popleft()
                     os.remove(delete_file)
-                save_file = '{0}/save_best_{1}_{2}_{3}.pt'.format(save_path, num_jobs, num_mas, i)
+                save_file = '{0}/save_best_{1}_{2}_{3}_{4}.pt'.format(save_path, num_jobs, num_mas, i, seed)
                 best_models.append(save_file)
                 torch.save(model.policy.state_dict(), save_file)
 
@@ -157,12 +173,12 @@ def main():
     # Save the data of training curve to files
     data = pd.DataFrame(np.array(valid_results).transpose(), columns=["res"])
     data.to_excel(writer_ave, sheet_name='Sheet1', index=False, startcol=1)
-    writer_ave.save()
+    writer_ave._save()
     writer_ave.close()
-    column = [i_col for i_col in range(100)]
+    column = [i_col for i_col in range(20)]
     data = pd.DataFrame(np.array(torch.stack(valid_results_100, dim=0).to('cpu')), columns=column)
     data.to_excel(writer_100, sheet_name='Sheet1', index=False, startcol=1)
-    writer_100.save()
+    writer_100._save()
     writer_100.close()
 
     print("total_time: ", time.time() - start_time)

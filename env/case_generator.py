@@ -22,7 +22,7 @@ class CaseGenerator:
         self.opes_per_job_min = opes_per_job_min  # The minimum number of operations for a job
         self.opes_per_job_max = opes_per_job_max
         self.proctime_per_ope_min = 1  # Minimum average processing time
-        self.proctime_per_ope_max = 20
+        self.proctime_per_ope_max = 20 # What about change this one?
         self.proctime_dev = 0.2
 
     def get_case(self, idx=0):
@@ -55,28 +55,28 @@ class CaseGenerator:
         lines_doc.append('{0}\t{1}\t{2}'.format(self.num_jobs, self.num_mas, self.num_options / self.num_opes))
         for i in range(self.num_jobs):
             flag = 0
-            flag_time = 0
-            flag_new_ope = 1
+            flag_time = 0 # processing time sign
+            flag_new_ope = 1 # New operation sign
             idx_ope = -1
             idx_ma = 0
             line = []
             option_max = sum(self.nums_option[self.num_ope_biass[i]:(self.num_ope_biass[i]+self.nums_ope[i])])
             idx_option = 0
             while True:
-                if flag == 0:
+                if flag == 0: # First number of one line, indicating operation number
                     line.append(self.nums_ope[i])
                     flag += 1
-                elif flag == flag_new_ope:
+                elif flag == flag_new_ope: # Start of one operation
                     idx_ope += 1
                     idx_ma = 0
                     flag_new_ope += self.nums_option[self.num_ope_biass[i]+idx_ope] * 2 + 1
                     line.append(self.nums_option[self.num_ope_biass[i]+idx_ope])
                     flag += 1
-                elif flag_time == 0:
+                elif flag_time == 0: # Start of machine option
                     line.append(self.ope_ma[self.num_ma_biass[self.num_ope_biass[i]+idx_ope] + idx_ma])
                     flag += 1
                     flag_time = 1
-                else:
+                else: # processing time of each machine option
                     line.append(self.proc_time[self.num_ma_biass[self.num_ope_biass[i]+idx_ope] + idx_ma])
                     flag += 1
                     flag_time = 0
