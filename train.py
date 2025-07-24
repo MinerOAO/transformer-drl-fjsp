@@ -22,14 +22,13 @@ def setup_seed(seed):
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
-    torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.deterministic = True
 
 def main():
     # PyTorch initialization
     # gpu_tracker = MemTracker()  # Used to monitor memory (of gpu)
-    # setup_seed(20010119)
     seed = torch.seed()
-    #seed = 32866273872500 , 21606217664800
+    # setup_seed(seed)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     if device.type == 'cuda':
         torch.cuda.set_device(device)
@@ -111,7 +110,6 @@ def main():
             env = gymnasium.make('fjsp-v0', case=case, env_paras=env_paras)
             env.reset()
             print('num_job: ', num_jobs, '\tnum_mas: ', num_mas, '\tnum_opes: ', sum(nums_ope))
-
         # Get state and completion signal
         state = env.state
         done = False

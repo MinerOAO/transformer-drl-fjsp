@@ -248,5 +248,3 @@ class TransformerEncoder(nn.Module):
         attention_1 = self.MHA1(flatten_actions, flatten_actions, flatten_actions)
         glu_result = self.glu_feed_forward(attention_1, flatten_actions)
         return glu_result
-
-    

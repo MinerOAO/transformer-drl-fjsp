@@ -46,9 +46,9 @@ class Memory:
         del self.nums_opes[:]
         
 
-class HGNNScheduler(nn.Module):
+class TransformerScheduler(nn.Module):
     def __init__(self, model_paras):
-        super(HGNNScheduler, self).__init__()
+        super(TransformerScheduler, self).__init__()
         self.device = model_paras["device"]
         self.in_size_ma = model_paras["in_size_ma"]  # Dimension of the raw feature vectors of machine nodes
         self.out_size_ma = model_paras["out_size_ma"]  # Dimension of the embedding of machine nodes
@@ -63,8 +63,6 @@ class HGNNScheduler(nn.Module):
         self.n_hidden_critic = model_paras["n_hidden_critic"]  # Number of layers in critic
         self.action_dim = model_paras["action_dim"]  # Output dimension of actor
 
-        # len() means of the number of HGNN iterations
-        # and the element means the number of heads of each HGNN (=1 in final experiment)
         self.num_heads = model_paras["num_heads"]
         self.dropout = model_paras["dropout"]
 
@@ -276,7 +274,7 @@ class PPO:
         self.num_envs = num_envs  # Number of parallel instances
         self.device = model_paras["device"]  # PyTorch device
 
-        self.policy = HGNNScheduler(model_paras).to(self.device)
+        self.policy = TransformerScheduler(model_paras).to(self.device)
         for param in self.policy.parameters():
             if len(param.shape) > 1:
                 nn.init.xavier_normal_(param)

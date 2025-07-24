@@ -73,7 +73,7 @@ def main():
     memories = PPO_model.Memory()
     model = PPO_model.PPO(model_paras, train_paras)
     rules = test_paras["rules"]
-    envs = []  # Store multiple environments
+    # envs = []  # Store multiple environments
 
     # Detect and add models to "rules"
     for root, ds, fs in os.walk('./model/'):
@@ -125,46 +125,41 @@ def main():
             env_test_paras["num_mas"] = ins_num_mas
 
             env_creation_time = time.time()
-            # Environment object already exists
-            if len(envs) == num_ins:
-                env = envs[i_ins]
-            # Create environment object
-            else:
-                # Clear the existing environment
-                meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
-                if meminfo.used / meminfo.total > 0.7:
-                    envs.clear()
-                # DRL-S, each env contains multiple (=num_sample) copies of one instance
-                if test_paras["sample"]:
-                    env = gymnasium.make('fjsp-v0', case=[test_file] * test_paras["num_sample"],
-                                   env_paras=env_test_paras, data_source='file')
-                # DRL-G, each env contains one instance
-                else:
-                    env = gymnasium.make('fjsp-v0', case=[test_file], env_paras=env_test_paras, data_source='file')
-                env.reset()
-                envs.append(copy.deepcopy(env))
-                # print("Create env[{0}]".format(i_ins))
-            # print(f"Env creation time:{time.time() - env_creation_time}")
 
-            # Schedule an instance/environment
-            # DRL-S
+            # DRL-S, each env contains multiple (=num_sample) copies of one instance
             if test_paras["sample"]:
-                makespan, time_re = schedule(env, model, memories, flag_sample=test_paras["sample"])
-                makespans.append(torch.min(makespan))
-                times.append(time_re)
-            # DRL-G
-            else:
-                time_s = []
-                makespan_s = []  # In fact, the results obtained by DRL-G do not change
-                for j in range(test_paras["num_average"]): # num_average times
-                    makespan, time_re = schedule(env, model, memories)
-                    makespan_s.append(makespan)
-                    time_s.append(time_re)
-                    if gantt:
-                        gantt_chart_plt(env.schedules_batch[0], env.nums_ope_batch[0], env.num_ope_biases_batch[0], env.num_jobs, int(makespan.item()), ins_name=test_files[i_ins])
+                batch_size = 5  
+                sub_makespans = []
+                sub_times = 0
+                
+                for batch in range(0, test_paras["num_sample"], batch_size):
+                    current_batch_size = min(batch_size, test_paras["num_sample"] - batch)
+                    env_test_paras["batch_size"] = current_batch_size
+                    
+                    env = gymnasium.make('fjsp-v0', 
+                                    case=[test_file] * current_batch_size,
+                                    env_paras=env_test_paras, 
+                                    data_source='file')
                     env.reset()
-                makespans.append(torch.mean(torch.tensor(makespan_s)))
-                times.append(torch.mean(torch.tensor(time_s)))
+                    
+                    makespan, time_re = schedule(env, model, memories, flag_sample=True)
+                    sub_makespans.append(makespan)
+                    sub_times += time_re
+                    
+                    del env  # 释放环境
+                    
+                makespan = torch.min(torch.cat(sub_makespans))
+                time_re = sub_times
+            # DRL-G, each env contains one instance
+            else:
+                env = gymnasium.make('fjsp-v0', case=[test_file], env_paras=env_test_paras, data_source='file')
+                env.reset()
+                makespan, time_re = schedule(env, model, memories)
+                if gantt:
+                    gantt_chart_plt(env.schedules_batch[0], env.nums_ope_batch[0], env.num_ope_biases_batch[0], env.num_jobs, int(makespan.item()), ins_name=test_files[i_ins])
+                del env
+            makespans.append(makespan)
+            times.append(time_re)
             print(f"finish env {i_ins}")
         print("rule_spend_time: ", time.time() - step_time_last)
 
@@ -188,9 +183,6 @@ def main():
         data.to_excel(writer_time, sheet_name='Sheet1', index=False, startcol=i_rules + 1)
         writer_time._save()
         # writer_time.close()
-
-        for env in envs:
-            env.reset()
         
     writer.close()
     writer_time.close()

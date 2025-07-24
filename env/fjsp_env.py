@@ -19,11 +19,12 @@ class EnvState:
     Class for the state of the environment
     '''
     # static
+    nums_opes_batch: torch.Tensor = None
     opes_appertain_batch: torch.Tensor = None
+    end_ope_biases_batch: torch.Tensor = None
+    # static (Unused)
     ope_pre_adj_batch: torch.Tensor = None
     ope_sub_adj_batch: torch.Tensor = None
-    end_ope_biases_batch: torch.Tensor = None
-    nums_opes_batch: torch.Tensor = None
 
     # dynamic
     batch_idxes: torch.Tensor = None
